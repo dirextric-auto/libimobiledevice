@@ -31,21 +31,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <signal.h>
-#if defined(HAVE_OPENSSL)
-#include <openssl/sha.h>
-#elif defined(HAVE_GNUTLS)
-#include <gcrypt.h>
-#elif defined(HAVE_MBEDTLS)
-#include <mbedtls/sha1.h>
-#if MBEDTLS_VERSION_NUMBER < 0x03000000
-#define mbedtls_sha1         mbedtls_sha1_ret
-#define mbedtls_sha1_starts  mbedtls_sha1_starts_ret
-#define mbedtls_sha1_update  mbedtls_sha1_update_ret
-#define mbedtls_sha1_finish  mbedtls_sha1_finish_ret
-#endif
-#else
-#error No supported crypto library enabled
-#endif
+#include <getopt.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <time.h>
@@ -55,7 +41,9 @@
 #include <libimobiledevice/mobilebackup.h>
 #include <libimobiledevice/notification_proxy.h>
 #include <libimobiledevice/afc.h>
+#include <libimobiledevice-glue/sha.h>
 #include <libimobiledevice-glue/utils.h>
+#include <plist/plist.h>
 
 #define MOBILEBACKUP_SERVICE_NAME "com.apple.mobilebackup"
 #define NP_SERVICE_NAME "com.apple.mobile.notification_proxy"
@@ -86,17 +74,6 @@ enum device_link_file_status_t {
 	DEVICE_LINK_FILE_STATUS_LAST_HUNK
 };
 
-static void sha1_of_data(const char *input, uint32_t size, unsigned char *hash_out)
-{
-#if defined(HAVE_OPENSSL)
-	SHA1((const unsigned char*)input, size, hash_out);
-#elif defined(HAVE_GNUTLS)
-	gcry_md_hash_buffer(GCRY_MD_SHA1, hash_out, input, size);
-#elif defined(HAVE_MBEDTLS)
-	mbedtls_sha1((unsigned char*)input, size, hash_out);
-#endif
-}
-
 static int compare_hash(const unsigned char *hash1, const unsigned char *hash2, int hash_len)
 {
 	int i;
@@ -108,89 +85,49 @@ static int compare_hash(const unsigned char *hash1, const unsigned char *hash2, 
 	return 1;
 }
 
-static void _sha1_update(void* context, const char* data, size_t len)
-{
-#if defined(HAVE_OPENSSL)
-	SHA1_Update(context, data, len);
-#elif defined(HAVE_GNUTLS)
-	gcry_md_write(context, data, len);
-#elif defined(HAVE_MBEDTLS)
-	mbedtls_sha1_update(context, (const unsigned char*)data, len);
-#endif
-}
-
 static void compute_datahash(const char *path, const char *destpath, uint8_t greylist, const char *domain, const char *appid, const char *version, unsigned char *hash_out)
 {
-#if defined(HAVE_OPENSSL)
-	SHA_CTX sha1;
-	SHA1_Init(&sha1);
-	void* psha1 = &sha1;
-#elif defined(HAVE_GNUTLS)
-	gcry_md_hd_t hd = NULL;
-	gcry_md_open(&hd, GCRY_MD_SHA1, 0);
-	if (!hd) {
-		printf("ERROR: Could not initialize libgcrypt/SHA1\n");
-		return;
-	}
-	gcry_md_reset(hd);
-	void* psha1 = hd;
-#elif defined(HAVE_MBEDTLS)
-	mbedtls_sha1_context sha1;
-	mbedtls_sha1_init(&sha1);
-	mbedtls_sha1_starts(&sha1);
-	void* psha1 = &sha1;
-#endif
+	sha1_context sha1;
+	sha1_init(&sha1);
 	FILE *f = fopen(path, "rb");
 	if (f) {
 		unsigned char buf[16384];
 		size_t len;
 		while ((len = fread(buf, 1, 16384, f)) > 0) {
-			_sha1_update(psha1, (const char*)buf, len);
+			sha1_update(&sha1, buf, len);
 		}
 		fclose(f);
-		_sha1_update(psha1, destpath, strlen(destpath));
-		_sha1_update(psha1, ";", 1);
+		sha1_update(&sha1, destpath, strlen(destpath));
+		sha1_update(&sha1, ";", 1);
 
 		if (greylist == 1) {
-			_sha1_update(psha1, "true", 4);
+			sha1_update(&sha1, "true", 4);
 		} else {
-			_sha1_update(psha1, "false", 5);
+			sha1_update(&sha1, "false", 5);
 		}
-		_sha1_update(psha1, ";", 1);
+		sha1_update(&sha1, ";", 1);
 
 		if (domain) {
-			_sha1_update(psha1, domain, strlen(domain));
+			sha1_update(&sha1, domain, strlen(domain));
 		} else {
-			_sha1_update(psha1, "(null)", 6);
+			sha1_update(&sha1, "(null)", 6);
 		}
-		_sha1_update(psha1, ";", 1);
+		sha1_update(&sha1, ";", 1);
 
 		if (appid) {
-			_sha1_update(psha1, appid, strlen(appid));
+			sha1_update(&sha1, appid, strlen(appid));
 		} else {
-			_sha1_update(psha1, "(null)", 6);
+			sha1_update(&sha1, "(null)", 6);
 		}
-		_sha1_update(psha1, ";", 1);
+		sha1_update(&sha1, ";", 1);
 
 		if (version) {
-			_sha1_update(psha1, version, strlen(version));
+			sha1_update(&sha1, version, strlen(version));
 		} else {
-			_sha1_update(psha1, "(null)", 6);
+			sha1_update(&sha1, "(null)", 6);
 		}
-#if defined(HAVE_OPENSSL)
-		SHA1_Final(hash_out, &sha1);
-#elif defined(HAVE_GNUTLS)
-		unsigned char *newhash = gcry_md_read(hd, GCRY_MD_SHA1);
-		memcpy(hash_out, newhash, 20);
-#elif defined(HAVE_MBEDTLS)
-		mbedtls_sha1_finish(&sha1, hash_out);
-#endif
+		sha1_final(&sha1, hash_out);
 	}
-#if defined(HAVE_GNUTLS)
-	gcry_md_close(hd);
-#elif defined(HAVE_MBEDTLS)
-	mbedtls_sha1_free(&sha1);
-#endif
 }
 
 static void print_hash(const unsigned char *hash, int len)
@@ -316,7 +253,7 @@ static void mobilebackup_write_status(const char *path, int status)
 	if (stat(file_path, &st) == 0)
 		remove(file_path);
 
-	plist_write_to_filename(status_plist, file_path, PLIST_FORMAT_XML);
+	plist_write_to_file(status_plist, file_path, PLIST_FORMAT_XML, 0);
 
 	plist_free(status_plist);
 	status_plist = NULL;
@@ -330,7 +267,7 @@ static int mobilebackup_read_status(const char *path)
 	plist_t status_plist = NULL;
 	char *file_path = mobilebackup_build_path(path, "Status", ".plist");
 
-	plist_read_from_filename(&status_plist, file_path);
+	plist_read_from_file(file_path, &status_plist, NULL);
 	free(file_path);
 	if (!status_plist) {
 		printf("Could not read Status.plist!\n");
@@ -453,7 +390,7 @@ static int mobilebackup_check_file_integrity(const char *backup_directory, const
 	}
 
 	infopath = mobilebackup_build_path(backup_directory, hash, ".mdinfo");
-	plist_read_from_filename(&mdinfo, infopath);
+	plist_read_from_file(infopath, &mdinfo, NULL);
 	free(infopath);
 	if (!mdinfo) {
 		printf("\r\n");
@@ -527,13 +464,13 @@ static int mobilebackup_check_file_integrity(const char *backup_directory, const
 	unsigned char fnhash[20];
 	char fnamehash[41];
 	char *p = fnamehash;
-	sha1_of_data(fnstr, strlen(fnstr), fnhash);
+	sha1((const unsigned char*)fnstr, strlen(fnstr), fnhash);
 	free(fnstr);
 	int i;
 	for ( i = 0; i < 20; i++, p += 2 ) {
 		snprintf (p, 3, "%02x", (unsigned char)fnhash[i] );
 	}
-	if (strcmp(fnamehash, hash)) {
+	if (strcmp(fnamehash, hash) != 0) {
 		printf("\r\n");
 		printf("WARNING: filename hash does not match for entry '%s'\n", hash);
 	}
@@ -544,7 +481,7 @@ static int mobilebackup_check_file_integrity(const char *backup_directory, const
 		plist_get_string_val(node, &auth_version);
 	}
 
-	if (strcmp(auth_version, "1.0")) {
+	if (strcmp(auth_version, "1.0") != 0) {
 		printf("\r\n");
 		printf("WARNING: Unknown AuthVersion '%s', DataHash cannot be verified!\n", auth_version);
 	}
@@ -598,15 +535,15 @@ static void do_post_notification(const char *notification)
 		}
 	}
 
-	lockdownd_start_service(client, NP_SERVICE_NAME, &service);
-	if (service && service->port) {
+	lockdownd_error_t ldret = lockdownd_start_service(client, NP_SERVICE_NAME, &service);
+	if (ldret == LOCKDOWN_E_SUCCESS) {
 		np_client_new(device, service, &np);
 		if (np) {
 			np_post_notification(np, notification);
 			np_client_free(np);
 		}
 	} else {
-		printf("Could not start %s\n", NP_SERVICE_NAME);
+		printf("Could not start %s: %s\n", NP_SERVICE_NAME, lockdownd_strerror(ldret));
 	}
 
 	if (service) {
@@ -647,27 +584,28 @@ static void clean_exit(int sig)
 	quit_flag++;
 }
 
-static void print_usage(int argc, char **argv)
+static void print_usage(int argc, char **argv, int is_error)
 {
-	char *name = NULL;
-	name = strrchr(argv[0], '/');
-	printf("Usage: %s [OPTIONS] CMD [DIRECTORY]\n", (name ? name + 1: argv[0]));
-	printf("\n");
-	printf("Create or restore backup from the current or specified directory.\n");
-	printf("\n");
-	printf("CMD:\n");
-	printf("  backup\tSaves a device backup into DIRECTORY\n");
-	printf("  restore\tRestores a device backup from DIRECTORY.\n");
-	printf("\n");
-	printf("OPTIONS:\n");
-	printf("  -u, --udid UDID\ttarget specific device by UDID\n");
-	printf("  -n, --network\t\tconnect to network device\n");
-	printf("  -d, --debug\t\tenable communication debugging\n");
-	printf("  -h, --help\t\tprints usage information\n");
-	printf("  -v, --version\t\tprints version information\n");
-	printf("\n");
-	printf("Homepage:    <" PACKAGE_URL ">\n");
-	printf("Bug Reports: <" PACKAGE_BUGREPORT ">\n");
+	char *name = strrchr(argv[0], '/');
+	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS] CMD DIRECTORY\n", (name ? name + 1: argv[0]));
+	fprintf(is_error ? stderr : stdout,
+		"\n"
+		"Create or restore backup in/from the specified directory.\n"
+		"\n"
+		"CMD:\n"
+		"  backup       Saves a device backup into DIRECTORY\n"
+		"  restore      Restores a device backup from DIRECTORY.\n"
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -d, --debug           enable communication debugging\n"
+		"  -h, --help            prints usage information\n"
+		"  -v, --version         prints version information\n"
+		"\n"
+		"Homepage:    <" PACKAGE_URL ">\n"
+		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
+	);
 }
 
 int main(int argc, char *argv[])
@@ -691,7 +629,15 @@ int main(int argc, char *argv[])
 	uint64_t length = 0;
 	uint64_t backup_total_size = 0;
 	enum device_link_file_status_t file_status = DEVICE_LINK_FILE_STATUS_NONE;
-	uint64_t c = 0;
+	int c = 0;
+	const struct option longopts[] = {
+		{ "debug", no_argument, NULL, 'd' },
+		{ "help", no_argument, NULL, 'h' },
+		{ "udid", required_argument, NULL, 'u' },
+		{ "network", no_argument, NULL, 'n' },
+		{ "version", no_argument, NULL, 'v' },
+		{ NULL, 0, NULL, 0}
+	};
 
 	/* we need to exit cleanly on running backups and restores or we cause havok */
 	signal(SIGINT, clean_exit);
@@ -702,59 +648,58 @@ int main(int argc, char *argv[])
 #endif
 
 	/* parse cmdline args */
-	for (i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--debug")) {
+	while ((c = getopt_long(argc, argv, "dhu:nv", longopts, NULL)) != -1) {
+		switch (c) {
+		case 'd':
 			idevice_set_debug_level(1);
-			continue;
-		}
-		else if (!strcmp(argv[i], "-u") || !strcmp(argv[i], "--udid")) {
-			i++;
-			if (!argv[i] || !*argv[i]) {
-				print_usage(argc, argv);
-				return 0;
+			break;
+		case 'u':
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: UDID must not be empty!\n");
+				print_usage(argc, argv, 1);
+				return 2;
 			}
-			udid = strdup(argv[i]);
-			continue;
-		}
-		else if (!strcmp(argv[i], "-n") || !strcmp(argv[i], "--network")) {
+			udid = strdup(optarg);
+			break;
+		case 'n':
 			use_network = 1;
-			continue;
-		}
-		else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			print_usage(argc, argv);
+			break;
+		case 'h':
+			print_usage(argc, argv, 0);
 			return 0;
-		}
-		else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
+		case 'v':
 			printf("%s %s\n", TOOL_NAME, PACKAGE_VERSION);
 			return 0;
+		default:
+			print_usage(argc, argv, 1);
+			return 2;
 		}
-		else if (!strcmp(argv[i], "backup")) {
-			cmd = CMD_BACKUP;
-		}
-		else if (!strcmp(argv[i], "restore")) {
-			cmd = CMD_RESTORE;
-		}
-		else if (backup_directory == NULL) {
-			backup_directory = argv[i];
-		}
-		else {
-			print_usage(argc, argv);
-			return 0;
-		}
+	}
+	argc -= optind;
+	argv += optind;
+
+	if (argc < 1) {
+		fprintf(stderr, "ERROR: Missing command.\n");
+		print_usage(argc+optind, argv-optind, 1);
+		return 2;
 	}
 
-	/* verify options */
-	if (cmd == -1) {
-		printf("No command specified.\n");
-		print_usage(argc, argv);
-		return -1;
+	if (!strcmp(argv[0], "backup")) {
+		cmd = CMD_BACKUP;
+	} else if (!strcmp(argv[0], "restore")) {
+		cmd = CMD_RESTORE;
+	} else {
+		fprintf(stderr, "ERROR: Invalid command '%s'.\n", argv[0]);
+		print_usage(argc+optind, argv-optind, 1);
+		return 2;
 	}
 
-	if (backup_directory == NULL) {
-		printf("No target backup directory specified.\n");
-		print_usage(argc, argv);
-		return -1;
+	if (argc < 2) {
+		fprintf(stderr, "No target backup directory specified.\n");
+		print_usage(argc+optind, argv-optind, 1);
+		return 2;
 	}
+	backup_directory = argv[1];
 
 	/* verify if passed backup directory exists */
 	if (stat(backup_directory, &st) != 0) {
@@ -784,9 +729,14 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+	if (!udid) {
+		idevice_get_udid(device, &udid);
+	}
+
 	if (LOCKDOWN_E_SUCCESS != (ldret = lockdownd_client_new_with_handshake(device, &client, TOOL_NAME))) {
 		printf("ERROR: Could not connect to lockdownd, error code %d\n", ldret);
 		idevice_free(device);
+		free(udid);
 		return -1;
 	}
 
@@ -806,6 +756,7 @@ int main(int argc, char *argv[])
 				printf("ERROR: This tool is only compatible with iOS 3 or below. For newer iOS versions please use the idevicebackup2 tool.\n");
 				lockdownd_client_free(client);
 				idevice_free(device);
+				free(udid);
 				return -1;
 			}
 		}
@@ -826,7 +777,7 @@ int main(int argc, char *argv[])
 		};
 		np_observe_notifications(np, noties);
 	} else {
-		printf("ERROR: Could not start service %s.\n", NP_SERVICE_NAME);
+		printf("ERROR: Could not start service %s: %s\n", NP_SERVICE_NAME, lockdownd_strerror(ldret));
 	}
 
 	afc_client_t afc = NULL;
@@ -834,9 +785,11 @@ int main(int argc, char *argv[])
 		/* start AFC, we need this for the lock file */
 		service->port = 0;
 		service->ssl_enabled = 0;
-		ldret = lockdownd_start_service(client, "com.apple.afc", &service);
+		ldret = lockdownd_start_service(client, AFC_SERVICE_NAME, &service);
 		if ((ldret == LOCKDOWN_E_SUCCESS) && service->port) {
 			afc_client_new(device, service, &afc);
+		} else {
+			printf("ERROR: Could not start service %s: %s\n", AFC_SERVICE_NAME, lockdownd_strerror(ldret));
 		}
 	}
 
@@ -849,7 +802,7 @@ int main(int argc, char *argv[])
 	ldret = lockdownd_start_service(client, MOBILEBACKUP_SERVICE_NAME, &service);
 	if ((ldret == LOCKDOWN_E_SUCCESS) && service && service->port) {
 		printf("Started \"%s\" service on port %d.\n", MOBILEBACKUP_SERVICE_NAME, service->port);
-		mobilebackup_client_new(device, service, &mobilebackup);
+		printf("%d\n", mobilebackup_client_new(device, service, &mobilebackup));
 
 		if (service) {
 			lockdownd_service_descriptor_free(service);
@@ -865,7 +818,7 @@ int main(int argc, char *argv[])
 		/* verify existing Info.plist */
 		if (stat(info_path, &st) == 0) {
 			printf("Reading Info.plist from backup.\n");
-			plist_read_from_filename(&info_plist, info_path);
+			plist_read_from_file(info_path, &info_plist, NULL);
 
 			if (!info_plist) {
 				printf("Could not read Info.plist\n");
@@ -876,7 +829,7 @@ int main(int argc, char *argv[])
 					/* update the last backup time within Info.plist */
 					mobilebackup_info_update_last_backup_date(info_plist);
 					remove(info_path);
-					plist_write_to_filename(info_plist, info_path, PLIST_FORMAT_XML);
+					plist_write_to_file(info_plist, info_path, PLIST_FORMAT_XML, 0);
 				} else {
 					printf("Aborting backup. Backup is not compatible with the current device.\n");
 					cmd = CMD_LEAVE;
@@ -909,15 +862,16 @@ int main(int argc, char *argv[])
 				if (aerr == AFC_E_SUCCESS) {
 					do_post_notification(NP_SYNC_DID_START);
 					break;
-				} else if (aerr == AFC_E_OP_WOULD_BLOCK) {
+				}
+				if (aerr == AFC_E_OP_WOULD_BLOCK) {
 					usleep(LOCK_WAIT);
 					continue;
-				} else {
-					fprintf(stderr, "ERROR: could not lock file! error code: %d\n", aerr);
-					afc_file_close(afc, lockfile);
-					lockfile = 0;
-					cmd = CMD_LEAVE;
 				}
+
+				fprintf(stderr, "ERROR: could not lock file! error code: %d\n", aerr);
+				afc_file_close(afc, lockfile);
+				lockfile = 0;
+				cmd = CMD_LEAVE;
 			}
 			if (i == LOCK_ATTEMPTS) {
 				fprintf(stderr, "ERROR: timeout while locking for sync\n");
@@ -941,7 +895,7 @@ int main(int argc, char *argv[])
 			/* read the last Manifest.plist */
 			if (!is_full_backup) {
 				printf("Reading existing Manifest.\n");
-				plist_read_from_filename(&manifest_plist, manifest_path);
+				plist_read_from_file(manifest_path, &manifest_plist, NULL);
 				if (!manifest_plist) {
 					printf("Could not read Manifest.plist, switching to full backup mode.\n");
 					is_full_backup = 1;
@@ -959,7 +913,7 @@ int main(int argc, char *argv[])
 				remove(info_path);
 				printf("Creating Info.plist for new backup.\n");
 				info_plist = mobilebackup_factory_info_plist_new(udid);
-				plist_write_to_filename(info_plist, info_path, PLIST_FORMAT_XML);
+				plist_write_to_file(info_plist, info_path, PLIST_FORMAT_XML, 0);
 			}
 			free(info_path);
 
@@ -991,7 +945,7 @@ int main(int argc, char *argv[])
 				} else if (err == MOBILEBACKUP_E_REPLY_NOT_OK) {
 					printf("ERROR: Could not start backup process: device refused to start the backup process.\n");
 				} else {
-					printf("ERROR: Could not start backup process: unspecified error occurred\n");
+					printf("ERROR: Could not start backup process: unspecified error occurred (%d)\n", err);
 				}
 				break;
 			}
@@ -1013,6 +967,7 @@ int main(int argc, char *argv[])
 			char *format_size = NULL;
 			int is_manifest = 0;
 			uint8_t b = 0;
+			uint64_t u64val = 0;
 
 			/* process series of DLSendFile messages */
 			do {
@@ -1044,8 +999,8 @@ int main(int argc, char *argv[])
 
 				/* check DLFileStatusKey (codes: 1 = Hunk, 2 = Last Hunk) */
 				node = plist_dict_get_item(node_tmp, "DLFileStatusKey");
-				plist_get_uint_val(node, &c);
-				file_status = c;
+				plist_get_uint_val(node, &u64val);
+				file_status = u64val;
 
 				/* get source filename */
 				node = plist_dict_get_item(node_tmp, "BackupManifestKey");
@@ -1097,7 +1052,7 @@ int main(int argc, char *argv[])
 							remove(filename_mdinfo);
 
 						node = plist_dict_get_item(node_tmp, "BackupFileInfo");
-						plist_write_to_filename(node, filename_mdinfo, PLIST_FORMAT_BINARY);
+						plist_write_to_file(node, filename_mdinfo, PLIST_FORMAT_BINARY, 0);
 
 						free(filename_mdinfo);
 					}
@@ -1139,9 +1094,8 @@ int main(int argc, char *argv[])
 				if ((!is_manifest)) {
 					if (hunk_index == 0 && file_status == DEVICE_LINK_FILE_STATUS_LAST_HUNK) {
 							print_progress(100);
-					} else {
-						if (file_size > 0)
-							print_progress((double)((file_size_current*100)/file_size));
+					} else if (file_size > 0) {
+							print_progress((double)(file_size_current*100)/file_size);
 					}
 				}
 
@@ -1210,7 +1164,7 @@ files_out:
 					if (manifest_plist) {
 						remove(manifest_path);
 						printf("Storing Manifest.plist...\n");
-						plist_write_to_filename(manifest_plist, manifest_path, PLIST_FORMAT_XML);
+						plist_write_to_file(manifest_plist, manifest_path, PLIST_FORMAT_XML, 0);
 					}
 
 					backup_ok = 1;
@@ -1241,21 +1195,21 @@ files_out:
 			}
 			/* now make sure backup integrity is ok! verify all files */
 			printf("Reading existing Manifest.\n");
-			plist_read_from_filename(&manifest_plist, manifest_path);
+			plist_read_from_file(manifest_path, &manifest_plist, NULL);
 			if (!manifest_plist) {
 				printf("Could not read Manifest.plist. Aborting.\n");
 				break;
 			}
 
 			printf("Verifying backup integrity, please wait.\n");
-			char *bin = NULL;
+			unsigned char *bin = NULL;
 			uint64_t binsize = 0;
 			node = plist_dict_get_item(manifest_plist, "Data");
 			if (!node || (plist_get_node_type(node) != PLIST_DATA)) {
 				printf("Could not read Data key from Manifest.plist!\n");
 				break;
 			}
-			plist_get_data_val(node, &bin, &binsize);
+			plist_get_data_val(node, (char**)&bin, &binsize);
 			plist_t backup_data = NULL;
 			if (bin) {
 				char *auth_ver = NULL;
@@ -1272,7 +1226,7 @@ files_out:
 					if (auth_sig && (auth_sig_len == 20)) {
 						/* calculate the sha1, then compare */
 						unsigned char data_sha1[20];
-						sha1_of_data(bin, binsize, data_sha1);
+						sha1(bin, binsize, data_sha1);
 						if (compare_hash(auth_sig, data_sha1, 20)) {
 							printf("AuthSignature is valid\n");
 						} else {
@@ -1285,7 +1239,7 @@ files_out:
 				} else if (auth_ver) {
 					printf("Unknown AuthVersion '%s', cannot verify AuthSignature\n", auth_ver);
 				}
-				plist_from_bin(bin, (uint32_t)binsize, &backup_data);
+				plist_from_bin((char*)bin, (uint32_t)binsize, &backup_data);
 				free(bin);
 			}
 			if (!backup_data) {
@@ -1368,7 +1322,7 @@ files_out:
 					while (node) {
 						/* TODO: read mddata/mdinfo files and send to device using DLSendFile */
 						file_info_path = mobilebackup_build_path(backup_directory, hash, ".mdinfo");
-						plist_read_from_filename(&file_info, file_info_path);
+						plist_read_from_file(file_info_path, &file_info, NULL);
 
 						/* get encryption state */
 						tmp_node = plist_dict_get_item(file_info, "IsEncrypted");
@@ -1588,7 +1542,7 @@ files_out:
 		if (manifest_path)
 			free(manifest_path);
 	} else {
-		printf("ERROR: Could not start service %s.\n", MOBILEBACKUP_SERVICE_NAME);
+		printf("ERROR: Could not start service %s: %s\n", MOBILEBACKUP_SERVICE_NAME, lockdownd_strerror(ldret));
 		lockdownd_client_free(client);
 		client = NULL;
 	}
@@ -1609,9 +1563,7 @@ files_out:
 
 	idevice_free(device);
 
-	if (udid) {
-		free(udid);
-	}
+	free(udid);
 
 	return 0;
 }

@@ -18,7 +18,7 @@ Some key features are:
 - **Implementation**: Object oriented architecture and service abstraction layer
 - **Cross-Platform:** Tested on Linux, macOS, Windows and Android platforms
 - **Utilities**: Provides various command-line utilities for device services
-- **SSL**: Allows choosing between OpenSSL or GnuTLS to handle SSL communication
+- **SSL**: Allows choosing between OpenSSL, GnuTLS, or MbedTLS to handle SSL communication
 - **Network**: Supports network connections with "WiFi sync" enabled devices
 - **Python:** Provides Cython based bindings for Python
 
@@ -57,6 +57,7 @@ First install all required dependencies and build tools:
 ```shell
 sudo apt-get install \
 	build-essential \
+	pkg-config \
 	checkinstall \
 	git \
 	autoconf \
@@ -65,9 +66,13 @@ sudo apt-get install \
 	libplist-dev \
 	libusbmuxd-dev \
 	libimobiledevice-glue-dev \
+	libtatsu-dev \
 	libssl-dev \
 	usbmuxd
 ```
+NOTE: [libtatsu](https://github.com/libimobiledevice/libtatsu) (and thus `libtatsu-dev`)
+is a new library that was just published recently, you have to
+[build it from source](https://github.com/libimobiledevice/libtatsu?tab=readme-ov-file#building).
 
 If you want to optionally build the documentation or Python bindings use:
 ```shell
@@ -127,6 +132,7 @@ The library bundles the following command-line utilities in the tools directory:
 | `idevice_id`               | List attached devices or print device name of given device         |
 | `idevicebackup`            | Create or restore backup for devices (legacy)                      |
 | `idevicebackup2`           | Create or restore backups for devices running iOS 4 or later       |
+| `idevicebtlogger`          | Capture Bluetooth HCI traffic from a device (requires log profile) |
 | `idevicecrashreport`       | Retrieve crash reports from a device                               |
 | `idevicedate`              | Display the current date or set it on a device                     |
 | `idevicedebug`             | Interact with the debugserver service of a device                  |
@@ -142,6 +148,7 @@ The library bundles the following command-line utilities in the tools directory:
 | `idevicescreenshot`        | Gets a screenshot from the connected device                        |
 | `idevicesetlocation`       | Simulate location on device                                        |
 | `idevicesyslog`            | Relay syslog of a connected device                                 |
+| `afcclient`                | Interact with device filesystem via AFC/HouseArrest                |
 
 Please consult the usage information or manual pages of each utility for a
 documentation of available command line options and usage examples like this:
@@ -191,4 +198,4 @@ iPadOS, tvOS, watchOS, and macOS are trademarks of Apple Inc.
 This project is an independent software and has not been authorized, sponsored,
 or otherwise approved by Apple Inc.
 
-README Updated on: 2021-08-30
+README Updated on: 2024-06-27

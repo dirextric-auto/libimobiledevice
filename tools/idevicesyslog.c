@@ -119,7 +119,7 @@ static void add_filter(const char* filterstr)
 	}
 }
 
-static int find_char(char c, char** p, char* end)
+static int find_char(char c, char** p, const char* end)
 {
 	while ((**p != c) && (*p < end)) {
 		(*p)++;
@@ -149,9 +149,11 @@ static void syslog_callback(char c, void *user_data)
 		do {
 			if (lp < 16) {
 				shall_print = 1;
-				cprintf(COLOR_WHITE);
+				cprintf(FG_WHITE);
 				break;
-			} else if (line[3] == ' ' && line[6] == ' ' && line[15] == ' ') {
+			}
+
+			if (line[3] == ' ' && line[6] == ' ' && line[15] == ' ') {
 				char* end = &line[lp];
 				char* p = &line[16];
 
@@ -190,10 +192,9 @@ static void syslog_callback(char c, void *user_data)
 					if (!found) {
 						shall_print = 0;
 						break;
-					} else {
-						triggered = 1;
-						shall_print = 1;
 					}
+					triggered = 1;
+					shall_print = 1;
 				} else if (num_trigger_filters == 0 && num_untrigger_filters > 0 && !triggered) {
 					shall_print = 0;
 					quit_flag++;
@@ -213,9 +214,8 @@ static void syslog_callback(char c, void *user_data)
 					if (!found) {
 						shall_print = 0;
 						break;
-					} else {
-						shall_print = 1;
 					}
+					shall_print = 1;
 				}
 
 				/* process name */
@@ -282,35 +282,35 @@ static void syslog_callback(char c, void *user_data)
 				const char* level_color = NULL;
 				if (!strncmp(p, "<Notice>:", 9)) {
 					level_end += 9;
-					level_color = COLOR_GREEN;
+					level_color = FG_GREEN;
 				} else if (!strncmp(p, "<Error>:", 8)) {
 					level_end += 8;
-					level_color = COLOR_RED;
+					level_color = FG_RED;
 				} else if (!strncmp(p, "<Warning>:", 10)) {
 					level_end += 10;
-					level_color = COLOR_YELLOW;
+					level_color = FG_YELLOW;
 				} else if (!strncmp(p, "<Debug>:", 8)) {
 					level_end += 8;
-					level_color = COLOR_MAGENTA;
+					level_color = FG_MAGENTA;
 				} else {
-					level_color = COLOR_WHITE;
+					level_color = FG_WHITE;
 				}
 
 				/* write date and time */
-				cprintf(COLOR_LIGHT_GRAY);
+				cprintf(FG_LIGHT_GRAY);
 				fwrite(line, 1, 16, stdout);
 
 				if (show_device_name) {
 					/* write device name */
-					cprintf(COLOR_DARK_YELLOW);
+					cprintf(FG_DARK_YELLOW);
 					fwrite(device_name_start, 1, device_name_end-device_name_start+1, stdout);
 					cprintf(COLOR_RESET);
 				}
 
 				/* write process name */
-				cprintf(COLOR_BRIGHT_CYAN);
+				cprintf(FG_BRIGHT_CYAN);
 				fwrite(process_name_start, 1, process_name_end-process_name_start, stdout);
-				cprintf(COLOR_CYAN);
+				cprintf(FG_CYAN);
 				fwrite(process_name_end, 1, proc_name_end-process_name_end+1, stdout);
 
 				/* write log level */
@@ -323,11 +323,11 @@ static void syslog_callback(char c, void *user_data)
 				lp -= p - linep;
 				linep = p;
 
-				cprintf(COLOR_WHITE);
+				cprintf(FG_WHITE);
 
 			} else {
 				shall_print = 1;
-				cprintf(COLOR_WHITE);
+				cprintf(FG_WHITE);
 			}
 		} while (0);
 
@@ -430,7 +430,8 @@ static void device_event_cb(const idevice_event_t* event, void* userdata)
 {
 	if (use_network && event->conn_type != CONNECTION_NETWORK) {
 		return;
-	} else if (!use_network && event->conn_type != CONNECTION_USBMUXD) {
+	}
+	if (!use_network && event->conn_type != CONNECTION_USBMUXD) {
 		return;
 	}
 	if (event->event == IDEVICE_DEVICE_ADD) {
@@ -466,37 +467,39 @@ static void clean_exit(int sig)
 
 static void print_usage(int argc, char **argv, int is_error)
 {
-	char *name = NULL;
-	name = strrchr(argv[0], '/');
+	char *name = strrchr(argv[0], '/');
 	fprintf(is_error ? stderr : stdout, "Usage: %s [OPTIONS]\n", (name ? name + 1: argv[0]));
 	fprintf(is_error ? stderr : stdout,
-		"\n" \
-		"Relay syslog of a connected device.\n" \
-		"\n" \
-		"OPTIONS:\n" \
-		"  -u, --udid UDID  target specific device by UDID\n" \
-		"  -n, --network    connect to network device\n" \
-		"  -x, --exit       exit when device disconnects\n" \
-		"  -h, --help       prints usage information\n" \
-		"  -d, --debug      enable communication debugging\n" \
-		"  -v, --version    prints version information\n" \
-		" --no-colors       disable colored output\n" \
-		"\n" \
-		"FILTER OPTIONS:\n" \
-		"  -m, --match STRING      only print messages that contain STRING\n" \
-		"  -t, --trigger STRING    start logging when matching STRING\n" \
-		"  -T, --untrigger STRING  stop logging when matching STRING\n" \
-		"  -p, --process PROCESS   only print messages from matching process(es)\n" \
-		"  -e, --exclude PROCESS   print all messages except matching process(es)\n" \
-		"                          PROCESS is a process name or multiple process names\n" \
-		"                          separated by \"|\".\n" \
-		"  -q, --quiet             set a filter to exclude common noisy processes\n" \
-		"  --quiet-list            prints the list of processes for --quiet and exits\n" \
-		"  -k, --kernel            only print kernel messages\n" \
-		"  -K, --no-kernel         suppress kernel messages\n" \
-		"\n" \
-		"For filter examples consult idevicesyslog(1) man page.\n" \
-		"\n" \
+		"\n"
+		"Relay syslog of a connected device.\n"
+		"\n"
+		"OPTIONS:\n"
+		"  -u, --udid UDID       target specific device by UDID\n"
+		"  -n, --network         connect to network device\n"
+		"  -x, --exit            exit when device disconnects\n"
+		"  -h, --help            prints usage information\n"
+		"  -d, --debug           enable communication debugging\n"
+		"  -v, --version         prints version information\n"
+		"  --no-colors           disable colored output\n"
+		"  -o, --output FILE     write to FILE instead of stdout\n"
+		"                        (existing FILE will be overwritten)\n"
+		"  --colors              force writing colored output, e.g. for --output\n"
+		"\n"
+		"FILTER OPTIONS:\n"
+		"  -m, --match STRING      only print messages that contain STRING\n"
+		"  -t, --trigger STRING    start logging when matching STRING\n"
+		"  -T, --untrigger STRING  stop logging when matching STRING\n"
+		"  -p, --process PROCESS   only print messages from matching process(es)\n"
+		"  -e, --exclude PROCESS   print all messages except matching process(es)\n"
+		"                          PROCESS is a process name or multiple process names\n"
+		"                          separated by \"|\".\n"
+		"  -q, --quiet             set a filter to exclude common noisy processes\n"
+		"  --quiet-list            prints the list of processes for --quiet and exits\n"
+		"  -k, --kernel            only print kernel messages\n"
+		"  -K, --no-kernel         suppress kernel messages\n"
+		"\n"
+		"For filter examples consult idevicesyslog(1) man page.\n"
+		"\n"
 		"Homepage:    <" PACKAGE_URL ">\n"
 		"Bug Reports: <" PACKAGE_BUGREPORT ">\n"
 	);
@@ -508,6 +511,7 @@ int main(int argc, char *argv[])
 	int exclude_filter = 0;
 	int include_kernel = 0;
 	int exclude_kernel = 0;
+	int force_colors = 0;
 	int c = 0;
 	const struct option longopts[] = {
 		{ "debug", no_argument, NULL, 'd' },
@@ -525,6 +529,8 @@ int main(int argc, char *argv[])
 		{ "no-kernel", no_argument, NULL, 'K' },
 		{ "quiet-list", no_argument, NULL, 1 },
 		{ "no-colors", no_argument, NULL, 2 },
+		{ "colors", no_argument, NULL, 3 },
+		{ "output", required_argument, NULL, 'o' },
 		{ "version", no_argument, NULL, 'v' },
 		{ NULL, 0, NULL, 0}
 	};
@@ -536,7 +542,7 @@ int main(int argc, char *argv[])
 	signal(SIGPIPE, SIG_IGN);
 #endif
 
-	while ((c = getopt_long(argc, argv, "dhu:nxt:T:m:e:p:qkKv", longopts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "dhu:nxt:T:m:e:p:qkKo:v", longopts, NULL)) != -1) {
 		switch (c) {
 		case 'd':
 			idevice_set_debug_level(1);
@@ -638,6 +644,22 @@ int main(int argc, char *argv[])
 		case 2:
 			term_colors_set_enabled(0);
 			break;
+		case 3:
+			force_colors = 1;
+			break;
+		case 'o':
+			if (!*optarg) {
+				fprintf(stderr, "ERROR: --output option requires an argument!\n");
+				print_usage(argc, argv, 1);
+				return 2;
+			} else {
+				if (freopen(optarg, "w", stdout) == NULL) {
+					fprintf(stderr, "ERROR: Failed to open output file '%s' for writing: %s\n", optarg, strerror(errno));
+					return 1;
+				}
+				term_colors_set_enabled(0);
+			}
+			break;
 		case 'v':
 			printf("%s %s\n", TOOL_NAME, PACKAGE_VERSION);
 			return 0;
@@ -645,6 +667,10 @@ int main(int argc, char *argv[])
 			print_usage(argc, argv, 1);
 			return 2;
 		}
+	}
+
+	if (force_colors) {
+		term_colors_set_enabled(1);
 	}
 
 	if (include_kernel > 0 && exclude_kernel > 0) {
@@ -657,7 +683,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "ERROR: -p and -e/-q cannot be used together.\n");
 		print_usage(argc, argv, 1);
 		return 2;
-	} else if (include_filter > 0 && exclude_kernel > 0) {
+	}
+	if (include_filter > 0 && exclude_kernel > 0) {
 		fprintf(stderr, "ERROR: -p and -K cannot be used together.\n");
 		print_usage(argc, argv, 1);
 		return 2;
@@ -700,20 +727,21 @@ int main(int argc, char *argv[])
 		if (!udid) {
 			fprintf(stderr, "No device found. Plug in a device or pass UDID with -u to wait for device to be available.\n");
 			return -1;
-		} else {
-			fprintf(stderr, "Waiting for device with UDID %s to become available...\n", udid);
 		}
+
+		fprintf(stderr, "Waiting for device with UDID %s to become available...\n", udid);
 	}
 
 	line_buffer_size = 1024;
 	line = malloc(line_buffer_size);
 
-	idevice_event_subscribe(device_event_cb, NULL);
+	idevice_subscription_context_t context = NULL;
+	idevice_events_subscribe(&context, device_event_cb, NULL);
 
 	while (!quit_flag) {
 		sleep(1);
 	}
-	idevice_event_unsubscribe();
+	idevice_events_unsubscribe(context);
 	stop_logging();
 
 	if (num_proc_filters > 0) {
